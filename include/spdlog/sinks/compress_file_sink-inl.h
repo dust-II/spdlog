@@ -320,28 +320,49 @@ SPDLOG_INLINE void compress_file_sink<Mutex>::async_compress_rotate_()
     name_set_t un_gz_files;
     name_map_t gz_files;
 
-    std::tie(un_gz_files, gz_files) =scan_files(details::os::dir_name(base_filename_).c_str(), base_filename_);
-    filename_t last_ungz_log = get_last_log_name(un_gz_files);
-    filename_t need_compress_file;
-    while (!(need_compress_file = get_first_log_name(un_gz_files)).empty() && 
-            (need_compress_file != last_ungz_log /*make sure not delete the file which is opening and writing.*/)) {
-        un_gz_files.erase(need_compress_file);
+    while (true) {
+        std::tie(un_gz_files, gz_files) =scan_files(details::os::dir_name(base_filename_).c_str(), base_filename_);
+        if (un_gz_files.size() < 2) {
+            return;
+        }
+
+        filename_t last_ungz_log = get_last_log_name(un_gz_files);
+        filename_t need_compress_file;
+        while (!(need_compress_file = get_first_log_name(un_gz_files)).empty() && 
+                (need_compress_file != last_ungz_log /*make sure not delete the file which is opening and writing.*/)) {
+            un_gz_files.erase(need_compress_file);
         
-        if (path_exists(need_compress_file)) {
-            filename_t gz_file = calc_gz_filename(base_filename_, extract_num_by_filename(need_compress_file));
-            // try to delete the gz_file file in case it already exists.
-            (void)details::os::remove(gz_file);
-            std::string tar_command;
-            tar_command.append("gzip -cf ").append(need_compress_file).append(" > ").append(gz_file);
-            std::system(tar_command.c_str());
-            size_t file_size = details::os::filesize(gz_file.c_str());
-            gz_files.insert(std::make_pair(gz_file, file_size));
-            //very import!   make sure not delete the file which is opening and writing.
-            (void)details::os::remove(need_compress_file);
+            if (path_exists(need_compress_file)) {
+                filename_t gz_file = calc_gz_filename(base_filename_, extract_num_by_filename(need_compress_file));
+                // try to delete the gz_file file in case it already exists.
+                (void)details::os::remove(gz_file);
+                std::string tar_command;
+                tar_command.append("gzip -cf ").append(need_compress_file).append(" > ").append(gz_file);
+                std::system(tar_command.c_str());
+                size_t file_size = details::os::filesize(gz_file.c_str());
+                gz_files.insert(std::make_pair(gz_file, file_size));
+                //very import!   make sure not delete the file which is opening and writing.
+                (void)details::os::remove(need_compress_file);
+            }
+        }
+        remove_old_ifneed_(gz_files, last_ungz_log);
+
+        //the fllowing code is use for avoid disk would be writed full 
+        //refind and quick delete new un_gz_files during compressing, when write log is faster than compress log
+        name_set_t remain_un_gz_files = scan_un_gz_files(details::os::dir_name(base_filename_).c_str(), base_filename_);
+        filename_t remain_last_ungz_log = get_last_log_name(remain_un_gz_files);
+        filename_t need_del_file;
+        while ( remain_un_gz_files.size() > 2 && 
+                !(need_del_file = get_first_log_name(remain_un_gz_files)).empty() &&
+                (need_del_file != remain_last_ungz_log /*make sure not delete the file which is opening and writing.*/)) {
+            
+            remain_un_gz_files.erase(need_del_file);
+        
+            if (path_exists(need_del_file)) {
+                (void)details::os::remove(need_del_file);
+            }
         }
     }
-        
-    remove_old_ifneed_(gz_files, last_ungz_log);
 }
 
 // delete the target if exists, and rename the src file  to target
